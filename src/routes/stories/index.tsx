@@ -1,18 +1,88 @@
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
+import { useState } from 'react'
 import { getStories } from '../../api/handler/story'
 import { Button } from '../../components/button'
+import { SearchInput } from '../../components/navigation/search-input'
+import { Pagination } from '../../components/navigation/pagination'
+import { FilterModal } from '../../components/feedback/filter-modal'
+import type { StoryCategory, StoryStatus } from '../../api/schema'
 
 import { Route as createRoute } from './create'
 
+interface StoriesSearch {
+  offset?: number
+  limit?: number
+  category?: StoryCategory
+  status?: StoryStatus
+  search?: string
+}
+
 export const Route = createFileRoute('/stories/')({
   component: RouteComponent,
-  loader: () => getStories({ offset: 0, limit: 10 }),
+  validateSearch: (search: Record<string, unknown>): StoriesSearch => ({
+    offset: Number(search.offset) || 0,
+    limit: Number(search.limit) || 10,
+    category: search.category as StoryCategory | undefined,
+    status: search.status as StoryStatus | undefined,
+    search: search.search as string | undefined,
+  }),
+  loaderDeps: ({ search }) => search,
+  loader: async ({ deps }) => getStories(deps),
 })
 
 function RouteComponent() {
   const response = Route.useLoaderData()
+  const search = Route.useSearch()
+  const navigate = useNavigate({ from: Route.fullPath })
   const stories = response.data
   const pagination = response.pagination
+
+  const [searchTerm, setSearchTerm] = useState(search.search || '')
+  const [isFilterModalOpen, setIsFilterModalOpen] = useState(false)
+
+  const handleSearch = () => {
+    navigate({
+      search: {
+        ...search,
+        search: searchTerm || undefined,
+        offset: 0, // Reset to first page on search
+      },
+    })
+  }
+
+  const handleFilterApply = (filters: { category?: StoryCategory; status?: StoryStatus }) => {
+    navigate({
+      search: {
+        ...search,
+        ...filters,
+        offset: 0, // Reset to first page on filter
+      },
+    })
+  }
+
+  const handleFilterReset = () => {
+    setSearchTerm('')
+    navigate({
+      search: {
+        offset: 0,
+        limit: search.limit || 10,
+      },
+    })
+  }
+
+  const handlePageChange = (page: number) => {
+    const newOffset = (page - 1) * (search.limit || 10)
+    navigate({
+      search: {
+        ...search,
+        offset: newOffset,
+      },
+    })
+  }
+
+  const activeFilterCount = [search.category, search.status].filter(Boolean).length
+  const currentPage = Math.floor((search.offset || 0) / (search.limit || 10)) + 1
+  const totalPages = Math.ceil(pagination.total / (search.limit || 10))
 
   return (
     <div className="max-w-7xl mx-auto p-6">
@@ -20,27 +90,20 @@ function RouteComponent() {
 
       {/* Search and Filter Bar */}
       <div className="flex gap-4 mb-6">
-        <div className="flex-1 relative">
-          <svg
-            className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-            />
-          </svg>
-          <input
-            type="text"
-            placeholder="Search by Writers/Title"
-            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500"
-          />
-        </div>
-        <Button variant="outline" className="px-4">
+        <SearchInput
+          placeholder="Search by Writers/Title"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+        />
+        <Button variant="primary" onClick={handleSearch}>
+          Search
+        </Button>
+        <Button
+          variant="outline"
+          className="px-4"
+          onClick={() => setIsFilterModalOpen(true)}
+        >
           <svg
             className="w-5 h-5"
             fill="none"
@@ -54,6 +117,11 @@ function RouteComponent() {
               d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
             />
           </svg>
+          {activeFilterCount > 0 && (
+            <span className="ml-2 bg-orange-500 text-white text-xs rounded-full px-2 py-0.5">
+              {activeFilterCount}
+            </span>
+          )}
         </Button>
         <Link to={createRoute.to}>
           <Button variant="primary" leftIcon={<span>+</span>}>
@@ -61,6 +129,15 @@ function RouteComponent() {
           </Button>
         </Link>
       </div>
+
+      <FilterModal
+        isOpen={isFilterModalOpen}
+        onClose={() => setIsFilterModalOpen(false)}
+        initialCategory={search.category}
+        initialStatus={search.status}
+        onApply={handleFilterApply}
+        onReset={handleFilterReset}
+      />
 
       {/* Stories Table */}
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
@@ -161,26 +238,11 @@ function RouteComponent() {
         <p className="text-sm text-gray-600">
           Menampilkan {stories.length} dari {pagination.total} data
         </p>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={pagination.offset === 0}
-          >
-            &lt;
-          </Button>
-          <span className="text-sm text-gray-600">
-            {Math.floor(pagination.offset / pagination.limit) + 1} /{' '}
-            {Math.ceil(pagination.total / pagination.limit)}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={pagination.offset + stories.length >= pagination.total}
-          >
-            &gt;
-          </Button>
-        </div>
+        <Pagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          onPageChange={handlePageChange}
+        />
       </div>
     </div>
   )
